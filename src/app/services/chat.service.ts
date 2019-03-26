@@ -1,5 +1,5 @@
 import {Injectable} from '@angular/core';
-import {BehaviorSubject, Observable, of} from 'rxjs';
+import {BehaviorSubject, interval, Observable, of, Subscription} from 'rxjs';
 
 import {ChatMessage} from '../models/chat-message.model';
 import {RdfService} from './rdf.service';
@@ -22,6 +22,8 @@ export class ChatService {
 
   friends: Array<User> = new Array<User>();
 
+  subscription: Subscription;
+
   /**
    * First it will try to get the session and then to load the current user in session data.
    * It will also load the user's friends.
@@ -30,11 +32,17 @@ export class ChatService {
    */
   constructor(private rdf: RdfService, private toastr: ToastrService) {
     this.rdf.getSession();
-    this.loadUserData().then(response => {
-      this.loadFriends();
+    this.loadUserData().then(async () => {
+      await this.loadFriends();
     });
     this.isActive = new BehaviorSubject<boolean>(false);
     this.thisUser = new BehaviorSubject<User>(null);
+
+    // To execute periodically (10 sec) functions
+    // this.subscription = interval(10000).subscribe(async () => {
+    //   await this.loadFriends();
+    //   await this.loadMessages();
+    // });
   }
 
   // Observables
@@ -106,7 +114,7 @@ export class ChatService {
       return;
     }
     (await this.rdf.getFriends()).forEach(async element => {
-      await this.rdf.fetcher.load(element.value);
+      await this.rdf.fetcher.load(element.value, {force: true, clearPreviousData: true});
       const photo: string = this.rdf.getValueFromVcard('hasPhoto', element.value) || '../assets/images/profile.png';
       this.friends.push(new User(element.value, this.rdf.getValueFromVcard('fn', element.value), photo));
       this.friends.sort(this.sortUserByName);
@@ -142,7 +150,7 @@ export class ChatService {
     }
     messages.forEach(async element => {
       const url = element.value + '#message';
-      await this.rdf.fetcher.load(url);
+      await this.rdf.fetcher.load(url, {force: true, clearPreviousData: true});
       const sender = this.rdf.getValueFromSchema('sender', url);
       const text = this.rdf.getValueFromSchema('text', url);
       const date = Date.parse(this.rdf.getValueFromSchema('dateSent', url));
@@ -198,7 +206,7 @@ export class ChatService {
     if (msg !== '' && this.otherUser) {
       const newMsg = new ChatMessage(this.thisUser.value.username, msg);
       this.addMessage(newMsg);
-      this.postMessage(newMsg).then(res => this.loadMessages());
+      this.postMessage(newMsg).then(async () => await this.loadMessages());
     }
   }
 
@@ -220,7 +228,7 @@ export class ChatService {
     `;
     const path = await this.getChatUrl(this.thisUser.value, this.otherUser) + 'message.ttl';
     fileClient.createFile(path).then((fileCreated: any) => {
-      fileClient.updateFile(fileCreated, message).then(success => {
+      fileClient.updateFile(fileCreated, message).then(() => {
         console.log('Message has been sent successfully');
       }, (err: any) => console.log(err));
     });
@@ -233,8 +241,8 @@ export class ChatService {
   async changeChat(user: User) {
     this.isActive.next(true);
     this.otherUser = user;
-    this.checkFolderStructure().then(response => {
-      this.loadMessages();
+    this.checkFolderStructure().then(async () => {
+      await this.loadMessages();
     });
   }
 
@@ -258,8 +266,8 @@ export class ChatService {
     const name = webId.split('/')[2].split('.')[0];
     if (this.thisUser.value.webId !== webId) {
       this.rdf.removeFriend(webId);
-      this.getChatUrl(this.thisUser.value, new User(webId, '', '')).then(response => {
-        this.removeFolderStructure(response.toString());
+      this.getChatUrl(this.thisUser.value, new User(webId, '', '')).then(async response => {
+        await this.removeFolderStructure(response.toString());
       });
     }
   }
@@ -288,7 +296,7 @@ export class ChatService {
           console.log('Folder structure correct');
         }, (err: any) => {
           console.log('Attempting to create: ' + charUrl);
-          this.createFolderStructure(charUrl).then(res => {
+          this.createFolderStructure(charUrl).then(() => {
             console.log('Creating ACL file...');
             this.grantAccessToFolder(charUrl, this.otherUser);
           });
